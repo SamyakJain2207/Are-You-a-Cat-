@@ -1,11 +1,13 @@
 # Virtual Environment
 venv/
 
-# CSV files and Training Data(Images)
-data/
+# Data (hide contents, keep folder)
+data/*
+!data/.gitkeep
 
-# Trained Models
-model/
+# Models (hide contents, keep folder)
+model/*
+!model/.gitkeep
 
 # Cache
 __pycache__/
@@ -16,7 +18,6 @@ __pycache__/
 
 # Logs
 *.log
-
 
 # IDE
 .vscode/
