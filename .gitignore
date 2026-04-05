@@ -1,0 +1,23 @@
+# Virtual Environment
+venv/
+
+# CSV files and Training Data(Images)
+data/
+
+# Trained Models
+model/
+
+# Cache
+__pycache__/
+*.pyc
+*.pyo
+.cache/
+*.cache
+
+# Logs
+*.log
+
+
+# IDE
+.vscode/
+.idea/
