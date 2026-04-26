@@ -1,6 +1,7 @@
 from pathlib import Path
 import tensorflow as tf
 import pandas as pd
+import mlflow
 
 # Paths
 WORK_DIR = Path("data/work")
@@ -78,43 +79,96 @@ def build_model():
 
     return model
 
+# ── NEW: logs metrics to MLflow after every epoch ──
+class MLflowCallback(tf.keras.callbacks.Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        if logs:
+            mlflow.log_metrics(
+                {
+                    "train_loss":     logs.get("loss"),
+                    "train_accuracy": logs.get("accuracy"),
+                    "val_loss":       logs.get("val_loss"),
+                    "val_accuracy":   logs.get("val_accuracy"),
+                },
+                step=epoch,
+            )
 
-# Main
-def main():
-    print("Loading datasets from CSV...")
-    train_ds = create_dataset(TRAIN_CSV, shuffle=True)
-    val_ds = create_dataset(VAL_CSV, shuffle=False)
-    test_ds = create_dataset(TEST_CSV, shuffle=False)
 
-    print("Building model...")
-    model = build_model()
+# ── UPDATED: now accepts hyperparams as arguments ──
+def main(lr=1e-4, dropout=0.3, epochs=EPOCHS):
+    mlflow.set_experiment("cat-not-cat-classifier")
 
-    callbacks = [
-        tf.keras.callbacks.EarlyStopping(
-            monitor="val_loss",
-            patience=3,
-            restore_best_weights=True,
-        ),
-        tf.keras.callbacks.ModelCheckpoint(
-            str(MODEL_PATH),
-            monitor="val_loss",
-            save_best_only=True,
-        ),
-    ]
+    # run_name makes it easy to identify runs in the UI
+    run_name = f"lr={lr}_dropout={dropout}_epochs={epochs}"
 
-    print("Training...")
-    model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=EPOCHS,
-        callbacks=callbacks,
-    )
+    with mlflow.start_run(run_name=run_name):
 
-    print("Evaluating on test set...")
-    loss, acc = model.evaluate(test_ds)
+        mlflow.log_params({
+            "img_size":       IMG_SIZE,
+            "batch_size":     BATCH_SIZE,
+            "epochs":         epochs,
+            "learning_rate":  lr,
+            "base_model":     "MobileNetV2",
+            "dropout":        dropout,
+            "optimizer":      "Adam",
+        })
 
-    print(f"\nTest Accuracy: {acc:.4f}")
-    print(f"Model saved to: {MODEL_PATH}")
+        print("Loading datasets...")
+        train_ds = create_dataset(TRAIN_CSV, shuffle=True)
+        val_ds   = create_dataset(VAL_CSV,   shuffle=False)
+        test_ds  = create_dataset(TEST_CSV,  shuffle=False)
+
+        # ── rebuild model with the dropout value passed in ──
+        base_model = tf.keras.applications.MobileNetV2(
+            weights="imagenet",
+            include_top=False,
+            input_shape=(224, 224, 3),
+        )
+        base_model.trainable = False
+
+        inputs  = tf.keras.Input(shape=(224, 224, 3))
+        x       = tf.keras.applications.mobilenet_v2.preprocess_input(inputs)
+        x       = base_model(x, training=False)
+        x       = tf.keras.layers.GlobalAveragePooling2D()(x)
+        x       = tf.keras.layers.Dropout(dropout)(x)       # ← uses the argument
+        outputs = tf.keras.layers.Dense(1, activation="sigmoid")(x)
+
+        model = tf.keras.Model(inputs, outputs)
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(lr),          # ← uses the argument
+            loss="binary_crossentropy",
+            metrics=["accuracy"],
+        )
+
+        callbacks = [
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_loss",
+                patience=3,
+                restore_best_weights=True,
+            ),
+            tf.keras.callbacks.ModelCheckpoint(
+                str(MODEL_PATH),
+                monitor="val_loss",
+                save_best_only=True,
+            ),
+            MLflowCallback(),
+        ]
+
+        print(f"Training with lr={lr}, dropout={dropout}...")
+        model.fit(
+            train_ds,
+            validation_data=val_ds,
+            epochs=epochs,
+            callbacks=callbacks,
+        )
+
+        loss, acc = model.evaluate(test_ds)
+        mlflow.log_metrics({"test_loss": loss, "test_accuracy": acc})
+
+        mlflow.log_artifact(str(MODEL_PATH))
+        mlflow.keras.log_model(model, artifact_path="keras-model")
+
+        print(f"\nTest Accuracy: {acc:.4f} | Run: {run_name}")
 
 
 if __name__ == "__main__":
